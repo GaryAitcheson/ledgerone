@@ -2,6 +2,7 @@
 import * as Store from './store.js';
 import * as Sync from './sync.js';
 import * as Crypto from './crypto.js';
+import * as Lock from './lock.js';
 import {
   Ledger, p, pounds, num, isCategory, isLiability, RealTypes, TypeLabel, TypeGroupLabel, Frequencies,
   today, dOf, toDocDate, fmtDate, addMonths, addDays, Ranges, PastMonthAndFuture, rangeFor, newId, MAX,
@@ -35,6 +36,8 @@ const I = {
   chev: svg('<path d="M6 9l6 6 6-6"/>', 'class="chev"'),
   left: svg('<path d="M15 6l-6 6 6 6"/>'), right: svg('<path d="M9 6l6 6-6 6"/>'),
   x: svg('<path d="M6 6l12 12M18 6L6 18"/>'),
+  back: svg('<path d="M21 5H9l-6 7 6 7h12z"/><path d="M17 9l-5 6M12 9l5 6"/>'),
+  face: svg('<path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M9 9v1M15 9v1M12 9v4h-1M9 16c1.5 1 4.5 1 6 0"/>'),
 };
 const iconFor = (type) => I[type] || I.Bank;
 const tint = { acct: 'var(--acct)', Expense: 'var(--exp)', Income: 'var(--inc)', rem: 'var(--rem)', home: 'var(--home)', budget: 'var(--acct)', report: '#f4a536' };
@@ -85,6 +88,7 @@ function setStatus(kind, text) {
 }
 
 function syncNow(opts = {}) {
+  if (lockShown) return Promise.resolve();          // wait until unlocked: no prompts over the lock screen
   if (!Sync.connected()) { setStatus('off', 'Sync not set up'); return Promise.resolve(); }
   if (syncing) return syncing;
   if (!navigator.onLine) { setStatus('off', state.dirty ? 'Offline · changes kept on iPad' : 'Offline'); return Promise.resolve(); }
@@ -149,6 +153,87 @@ function promptUnlock(err, retry) {
   setTimeout(() => f.pass.focus(), 50);
 }
 
+// ---------- app lock (PIN, Face ID / Touch ID) ----------
+let lockShown = false, hiddenAt = 0;
+
+async function showLock(after) {
+  if (lockShown) return;
+  lockShown = true;
+  const l = await Lock.get();
+  const bio = !!l?.bio && await Lock.bioAvailable();
+  const len = l?.length || 4;
+  document.querySelector('#dlg')?.open && document.querySelector('#dlg').close();
+  const el = document.createElement('div');
+  el.id = 'lock';
+  el.innerHTML = `<div class="lock-box">
+      <img src="icons/icon-192.png" alt="">
+      <h1>LedgerOne</h1>
+      <p class="lock-msg">Enter your PIN</p>
+      <div class="lock-dots">${'<i></i>'.repeat(len)}</div>
+      <div class="keypad">
+        ${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => `<button data-k="${n}">${n}</button>`).join('')}
+        ${bio ? `<button data-bio aria-label="Use Face ID or Touch ID">${I.face}</button>` : '<span></span>'}
+        <button data-k="0">0</button>
+        <button data-del aria-label="Delete">${I.back}</button>
+      </div>
+      ${bio ? '<button class="lock-link" data-bio>Use Face ID / Touch ID</button>' : ''}
+      <button class="lock-link" data-forgot>Forgot PIN?</button>
+    </div>`;
+  document.body.appendChild(el);
+  const msg = el.querySelector('.lock-msg'), dots = [...el.querySelectorAll('.lock-dots i')];
+  let pin = '', busy = false;
+  const show = () => dots.forEach((d, i) => d.classList.toggle('on', i < pin.length));
+  const done = () => {
+    el.remove(); lockShown = false;
+    document.removeEventListener('keydown', onKey, true);
+    after && after();
+  };
+  async function tryPin() {
+    busy = true;
+    const r = await Lock.checkPin(pin);
+    busy = false;
+    if (r.ok) return done();
+    pin = ''; show();
+    el.querySelector('.lock-dots').classList.remove('shake'); void el.offsetWidth; el.querySelector('.lock-dots').classList.add('shake');
+    msg.textContent = r.wait ? `Too many tries. Try again in ${r.wait < 60 ? r.wait + ' seconds' : Math.ceil(r.wait / 60) + ' minutes'}.` : 'Wrong PIN. Try again.';
+  }
+  function press(k) {                               // instant: the lockout is checked when the PIN is submitted
+    if (busy) return;
+    if (k === 'del') pin = pin.slice(0, -1);
+    else if (pin.length < 8) pin += k;
+    show();
+    if (pin.length >= len) tryPin();
+  }
+  function onKey(e) {
+    if (/^[0-9]$/.test(e.key)) { e.preventDefault(); press(e.key); }
+    else if (e.key === 'Backspace') { e.preventDefault(); press('del'); }
+  }
+  document.addEventListener('keydown', onKey, true);
+  Lock.waitSeconds().then(w => { if (w) msg.textContent = `Too many tries. Try again in ${w < 60 ? w + ' seconds' : Math.ceil(w / 60) + ' minutes'}.`; });
+  el.addEventListener('click', async (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.k) press(b.dataset.k);
+    else if (b.hasAttribute('data-del')) press('del');
+    else if (b.hasAttribute('data-bio')) {
+      try { if (await Lock.unlockWithBio()) done(); else msg.textContent = "Face ID / Touch ID didn't match. Use your PIN."; }
+      catch { msg.textContent = 'Face ID / Touch ID was cancelled. Use your PIN.'; }
+    } else if (b.hasAttribute('data-forgot')) {
+      if (!confirm('Forgot your PIN? This erases LedgerOne on this iPad and disconnects Dropbox. Your book stays safe in Dropbox and on your PC: reconnect Dropbox afterwards to get it back.')) return;
+      await Store.del('doc'); await Store.del('base'); await Store.del('meta'); await Crypto.forgetKey(); await Lock.remove();
+      Sync.disconnect();
+      location.reload();
+    }
+  });
+  show();
+}
+
+/** Lock again when the app comes back after being away longer than the chosen time. */
+async function relockIfDue() {
+  const l = await Lock.get();
+  if (!l?.hash || lockShown || !hiddenAt) return;
+  if ((Date.now() - hiddenAt) / 1000 >= (l.timeout ?? 60)) showLock(() => { render(); syncNow(); });
+}
+
 // ---------- theme ----------
 function effectiveDark() {
   const t = pref('theme', 'system');
@@ -183,6 +268,7 @@ const go = (hash) => { if (location.hash === hash) render(); else location.hash 
 
 let lastRoute = '', searching = false;
 function render() {
+  if (lockShown) return;
   const r = parseRoute();
   const key = `${r.name}/${r.arg || ''}`;
   if (key !== lastRoute) {
@@ -703,6 +789,8 @@ function pageSettings(main) {
     <h3>Files (manual sync, e.g. through iCloud Drive)</h3>
     <div class="card"><p class="muted">Open a <code>ledger.json</code> saved by LedgerOne on Windows; changes are merged with this iPad's. Save a copy to send your changes back.</p>
       <div class="row-gap"><button class="btn" data-act="open">Open a file…</button><button class="btn" data-act="save"${L ? '' : ' disabled'}>Save a copy…</button></div></div>
+    <h3>App lock</h3>
+    <div class="card" data-k="lockcard"><p class="muted">Loading…</p></div>
     <h3>Book encryption</h3>
     <div class="card">${state.enc
       ? `<p><b>On.</b> The book is encrypted in Dropbox, and this iPad has its passphrase.</p>
@@ -763,6 +851,7 @@ function pageSettings(main) {
     state.dirty = true; await syncNow({ uploadIfMissing: true });
   });
   on('disconnect', () => { if (confirm('Disconnect Dropbox? Your data stays on this iPad.')) { Sync.disconnect(); setStatus('off', 'Sync not set up'); render(); } });
+  fillLockCard(main.querySelector('[data-k="lockcard"]'));
   on('forgetkey', async () => {
     if (!confirm('Forget the passphrase on this iPad? You will need to enter it again to sync.')) return;
     await Crypto.forgetKey(); toast('Passphrase forgotten on this iPad');
@@ -774,9 +863,88 @@ function pageSettings(main) {
   main.querySelector('[data-act="closed"]').addEventListener('change', (e) => { setPref('showClosed', e.target.checked); renderSidebar(parseRoute()); });
   on('erase', async () => {
     if (!confirm('Erase the book stored on this iPad? Your Dropbox copy and your PC are not touched.')) return;
-    await Store.del('doc'); await Store.del('base'); await Store.del('meta'); await Crypto.forgetKey();
+    await Store.del('doc'); await Store.del('base'); await Store.del('meta'); await Crypto.forgetKey(); await Lock.remove();
     state = { doc: null, baseText: null, rev: null, dirty: false, enc: null }; L = null; render();
   });
+}
+
+// ---------- app lock settings ----------
+async function fillLockCard(card) {
+  if (!card) return;
+  const l = await Lock.get();
+  const bioOk = await Lock.bioAvailable();
+  if (!l?.hash) {
+    card.innerHTML = `<p><b>Off.</b> Ask for a PIN${bioOk ? ' or Face ID / Touch ID' : ''} whenever LedgerOne opens.</p>
+      <button class="btn primary" data-lk="setpin">Set a PIN…</button>`;
+  } else {
+    const t = l.timeout ?? 60;
+    card.innerHTML = `<p><b>On.</b> LedgerOne asks for your PIN${l.bio ? ' or Face ID / Touch ID' : ''} when it opens.</p>
+      <div class="row-gap" style="margin:10px 0">
+        <label>Lock again after <select class="field" data-lk="timeout" style="width:auto">
+          ${[[0, 'Immediately'], [60, '1 minute'], [300, '5 minutes'], [900, '15 minutes']].map(([v, n]) => `<option value="${v}"${v === t ? ' selected' : ''}>${n}</option>`).join('')}
+        </select> away</label>
+      </div>
+      <div class="row-gap">
+        ${bioOk ? (l.bio ? '<button class="btn" data-lk="biooff">Turn off Face ID / Touch ID</button>' : '<button class="btn primary" data-lk="bioon">Use Face ID / Touch ID</button>') : ''}
+        <button class="btn" data-lk="change">Change PIN…</button>
+        <button class="btn danger" data-lk="off">Turn off app lock…</button>
+      </div>
+      ${bioOk ? '' : '<p class="muted" style="font-size:13px">Face ID / Touch ID isn\'t available here. Open LedgerOne from the Home Screen on an iPad with Face ID or Touch ID set up.</p>'}`;
+  }
+  const act = (k, fn) => card.querySelector(`[data-lk="${k}"]`)?.addEventListener('click', fn);
+  const refresh = () => fillLockCard(card);
+  act('setpin', () => pinDialog('Set a PIN', async (pin) => { await Lock.setPin(pin); toast('App lock is on'); refresh(); }));
+  act('change', () => confirmPin('Enter your current PIN', () => pinDialog('Choose a new PIN', async (pin) => { await Lock.setPin(pin); toast('PIN changed'); refresh(); })));
+  act('off', () => confirmPin('Enter your PIN to turn off the app lock', async () => { await Lock.remove(); toast('App lock is off'); refresh(); }));
+  act('bioon', async () => {
+    try { await Lock.enrollBio(); toast('Face ID / Touch ID is on'); }
+    catch (e) { toast("Couldn't set up Face ID / Touch ID: " + (e.message || e.name)); }
+    refresh();
+  });
+  act('biooff', async () => { await Lock.disableBio(); toast('Face ID / Touch ID is off'); refresh(); });
+  card.querySelector('[data-lk="timeout"]')?.addEventListener('change', async (e) => { await Lock.setTimeoutSeconds(Number(e.target.value)); toast('Saved'); });
+}
+
+/** Choose a new PIN (typed twice). */
+function pinDialog(title, onDone) {
+  const dlg = $('#dlg');
+  dlg.innerHTML = `<form method="dialog">
+    <div class="dlg-head"><h2>${esc(title)}</h2></div>
+    <div class="dlg-body"><div class="form">
+      <label class="w2">PIN (4 to 8 digits)<input type="password" name="p1" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="new-password"></label>
+      <label class="w2">Type it again<input type="password" name="p2" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="new-password"></label>
+    </div><div class="err"></div></div>
+    <div class="dlg-foot"><span class="spacer"></span><button class="btn" value="cancel">Cancel</button><button type="button" class="btn primary" data-ok>Save</button></div>
+  </form>`;
+  const f = dlg.querySelector('form'), err = dlg.querySelector('.err');
+  dlg.querySelector('[data-ok]').addEventListener('click', async () => {
+    const a = f.p1.value, b = f.p2.value;
+    if (!/^[0-9]{4,8}$/.test(a)) { err.textContent = 'Use 4 to 8 digits.'; return; }
+    if (a !== b) { err.textContent = "The two PINs don't match."; return; }
+    dlg.close();
+    await onDone(a);
+  });
+  dlg.showModal();
+  setTimeout(() => f.p1.focus(), 50);
+}
+
+/** Ask for the current PIN before a sensitive change. */
+function confirmPin(title, onOk) {
+  const dlg = $('#dlg');
+  dlg.innerHTML = `<form method="dialog">
+    <div class="dlg-head"><h2>${esc(title)}</h2></div>
+    <div class="dlg-body"><div class="form"><label class="w4">PIN<input type="password" name="pin" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="current-password"></label></div><div class="err"></div></div>
+    <div class="dlg-foot"><span class="spacer"></span><button class="btn" value="cancel">Cancel</button><button type="button" class="btn primary" data-ok>Continue</button></div>
+  </form>`;
+  const f = dlg.querySelector('form'), err = dlg.querySelector('.err');
+  dlg.querySelector('[data-ok]').addEventListener('click', async () => {
+    const r = await Lock.checkPin(f.pin.value);
+    if (!r.ok) { err.textContent = r.wait ? `Too many tries. Try again in ${r.wait} seconds.` : 'Wrong PIN.'; return; }
+    dlg.close();
+    await onOk();
+  });
+  dlg.showModal();
+  setTimeout(() => f.pin.focus(), 50);
 }
 
 // ---------- files ----------
@@ -843,7 +1011,11 @@ function wire() {
     if (location.hash === '#/all') { searching = false; render(); } else location.hash = '#/all';
   });
   matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => { applyTheme(); });
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') syncNow(); else persistNow(); });
+  document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState === 'visible') { await relockIfDue(); if (!lockShown) syncNow(); }
+    else { hiddenAt = Date.now(); persistNow(); }
+  });
+  window.addEventListener('pageshow', (e) => { if (e.persisted) relockIfDue(); });
   window.addEventListener('online', () => syncNow());
   window.addEventListener('offline', () => setStatus('off', 'Offline'));
   window.addEventListener('resize', () => { if (reg) { reg.drawn = ''; drawRows(); } });
@@ -862,8 +1034,8 @@ async function boot() {
     }
   } catch (e) { console.error(e); toast('Couldn\'t read the saved book: ' + e.message); }
   // default register filter is "This month" (like Windows); range resets per session
-  render();
-  if (Sync.connected()) syncNow(); else setStatus('off', 'Sync not set up');
+  const start = () => { render(); if (Sync.connected()) syncNow(); else setStatus('off', 'Sync not set up'); };
+  if (await Lock.enabled()) showLock(start); else start();
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 
