@@ -17,8 +17,13 @@ const b64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replac
 
 /** Step 1: returns the Dropbox page to open; the user approves and copies the code shown. */
 export async function authUrl() {
-  const verifier = b64url(crypto.getRandomValues(new Uint8Array(48)));
-  setPref('dbx.verifier', verifier);
+  // keep the same secret until connected: the app may reload while you're away approving in Safari
+  let verifier = pref('dbx.verifier', '');
+  if (!verifier || pref('dbx.verifierKey', '') !== cfg.appKey) {
+    verifier = b64url(crypto.getRandomValues(new Uint8Array(48)));
+    setPref('dbx.verifier', verifier);
+    setPref('dbx.verifierKey', cfg.appKey);
+  }
   const challenge = b64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
   const q = new URLSearchParams({ client_id: cfg.appKey, response_type: 'code', code_challenge: challenge, code_challenge_method: 'S256', token_access_type: 'offline' });
   return `https://www.dropbox.com/oauth2/authorize?${q}`;
@@ -31,6 +36,7 @@ export async function finishAuth(code) {
   const j = await r.json();
   if (!r.ok) throw new Error(j.error_description || j.error || 'Dropbox refused the code');
   cfg.tokens = { access: j.access_token, refresh: j.refresh_token, expires: Date.now() + (j.expires_in - 60) * 1000 };
+  setPref('dbx.verifier', '');      // used up
 }
 
 export function disconnect() { cfg.tokens = null; }

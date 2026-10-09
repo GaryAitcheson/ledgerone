@@ -653,7 +653,9 @@ function pageSettings(main) {
         <div class="form"><label class="w2">App key<input name="key" value="${esc(Sync.cfg.appKey)}" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
         <label class="w2">File path in the app folder<input name="path" value="${esc(Sync.cfg.path)}" autocapitalize="off"></label></div>
         <p>2. Tap <b>Open Dropbox</b>, allow access, then copy the code Dropbox shows.</p>
-        <div class="row-gap"><button class="btn" data-act="auth">Open Dropbox</button></div>
+        <div class="row-gap"><a class="btn" data-act="auth" href="#" target="_blank" rel="noopener">Open Dropbox</a>
+          <button class="btn" data-act="copyauth">Copy link</button></div>
+        <p class="muted" style="font-size:13px">If Dropbox doesn't open, tap Copy link, paste it into Safari, and come back here afterwards.</p>
         <p>3. Paste the code here.</p>
         <div class="row-gap"><input class="field" name="code" placeholder="Paste the access code" style="max-width:360px" autocomplete="off" autocapitalize="off"><button class="btn primary" data-act="connect">Connect</button></div>`}
       <div class="err" data-k="err"></div>
@@ -672,11 +674,32 @@ function pageSettings(main) {
   </div>`;
   const err = main.querySelector('[data-k="err"]');
   const on = (act, fn) => main.querySelector(`[data-act="${act}"]`)?.addEventListener('click', fn);
-  on('auth', async () => {
-    const key = main.querySelector('[name="key"]').value.trim();
-    if (!key) { err.textContent = 'Enter the App key first.'; return; }
-    Sync.cfg.appKey = key; Sync.cfg.path = main.querySelector('[name="path"]').value || '/ledger.json';
-    window.open(await Sync.authUrl(), '_blank');
+  // Safari only opens a new page straight from a tap, so the Dropbox link is prepared before the tap
+  const authLink = main.querySelector('[data-act="auth"]');
+  const keyInput = main.querySelector('[name="key"]');
+  let authUrl = '';
+  async function prepareAuthLink() {
+    if (!authLink) return;
+    const key = keyInput.value.trim();
+    if (!key) { authUrl = ''; authLink.href = '#'; return; }
+    Sync.cfg.appKey = key;
+    Sync.cfg.path = main.querySelector('[name="path"]').value || '/ledger.json';
+    authUrl = await Sync.authUrl();
+    authLink.href = authUrl;
+  }
+  if (authLink) {
+    let kt;
+    keyInput.addEventListener('input', () => { clearTimeout(kt); kt = setTimeout(prepareAuthLink, 250); });
+    authLink.addEventListener('click', (e) => {
+      if (!authUrl || keyInput.value.trim() !== Sync.cfg.appKey) { e.preventDefault(); err.textContent = 'Enter the App key first (wait a moment after typing it).'; prepareAuthLink(); }
+    });
+    prepareAuthLink();
+  }
+  on('copyauth', async () => {
+    if (!authUrl || keyInput.value.trim() !== Sync.cfg.appKey) await prepareAuthLink();
+    if (!authUrl) { err.textContent = 'Enter the App key first.'; return; }
+    try { await navigator.clipboard.writeText(authUrl); toast('Link copied — paste it into Safari'); }
+    catch { prompt('Copy this link and open it in Safari:', authUrl); }
   });
   on('connect', async () => {
     try {
