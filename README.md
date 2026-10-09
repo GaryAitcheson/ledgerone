@@ -28,6 +28,10 @@ LedgerOne (Windows) ──▶ Dropbox\Apps\<your app>\ledger.json ◀── Ledg
 
 ### 1. Put the app online (HTTPS is required to install it)
 
+**Done:** it is published at <https://garyaitcheson.github.io/ledgerone/> from the
+`GaryAitcheson/ledgerone` repository. To update it, commit and push changes in this folder.
+The steps below are for hosting it somewhere else.
+
 The app is just the files in this `web` folder (no data in it). Any static HTTPS host works, for example
 **GitHub Pages** (free):
 
