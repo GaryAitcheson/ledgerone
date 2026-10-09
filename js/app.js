@@ -408,7 +408,7 @@ function drawRows() {
   const t = today();
   let html = '';
   for (let i = start; i < end; i++) {
-    const r = reg.rows[i], d = dOf(r.t.Date), st = r.t.Status || 'Uncleared';
+    const r = reg.rows[i], d = dOf(r.t.Date), st = { Cleared: 'Cleared', Reconciled: 'Reconciled' }[r.t.Status] || 'Uncleared';
     const cls = `reg-row${d > t ? ' future' : ''}${reg.sel === r ? ' sel' : ''}`;
     const pay = r.amount < 0 ? num(-r.amount) : '', dep = r.amount > 0 ? num(r.amount) : '';
     const tags = (r.t.Tags || []).join(', ');
@@ -476,7 +476,7 @@ function openTxn(t) {
     <div class="dlg-body">
       <div class="form">
         <label class="w2">Account<select name="acct">${accts.map(a => `<option value="${esc(a.Id)}"${a.Id === draft.AccountId ? ' selected' : ''}>${esc(a.Name)}</option>`).join('')}</select></label>
-        <label>Date<input type="date" name="date" value="${dOf(draft.Date)}" required></label>
+        <label>Date<input type="date" name="date" value="${esc(dOf(draft.Date))}" required></label>
         <label>Cheque #<input name="num" value="${esc(draft.Number || '')}"></label>
         <label class="w4">Description<input name="payee" list="payeeList" value="${esc(draft.Payee)}" autocomplete="off" required></label>
       </div>
