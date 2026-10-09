@@ -15,8 +15,7 @@ reminders and budgets in LedgerOne on Windows.
 LedgerOne (Windows) ──▶ Dropbox\Apps\<your app>\ledger.json ◀── LedgerOne for iPad (Dropbox API)
 ```
 
-* LedgerOne on Windows keeps its book in your Dropbox app folder. The Dropbox desktop app syncs the file;
-  LedgerOne watches it and reloads within seconds when the iPad changes it.
+* LedgerOne on Windows keeps its book in your Dropbox app folder. The Dropbox desktop app syncs the file;  LedgerOne watches it and reloads within seconds when the iPad changes it.
 * The iPad keeps a full copy offline and syncs when opened, after edits (8 s later) and when back online.
 * Both apps **merge** rather than overwrite: changes are matched record by record (transactions, accounts,
   reminders, budget lines), so edits made on both devices are kept. If the same transaction was edited on
@@ -27,10 +26,6 @@ LedgerOne (Windows) ──▶ Dropbox\Apps\<your app>\ledger.json ◀── Ledg
 ## One-time setup (about 10 minutes)
 
 ### 1. Put the app online (HTTPS is required to install it)
-
-**Done:** it is published at <https://garyaitcheson.github.io/ledgerone/> from the
-`GaryAitcheson/ledgerone` repository. To update it, commit and push changes in this folder.
-The steps below are for hosting it somewhere else.
 
 The app is just the files in this `web` folder (no data in it). Any static HTTPS host works, for example
 **GitHub Pages** (free):
@@ -47,7 +42,7 @@ The app is just the files in this `web` folder (no data in it). Any static HTTPS
 ### 2. Create your Dropbox app (gives the iPad app its own folder)
 
 1. Go to <https://www.dropbox.com/developers/apps> ▸ **Create app**.
-2. Choose **Scoped access** ▸ **App folder** ▸ name it, e.g. `LedgerOne-YourName` (names must be unique).
+2. Choose **Scoped access** ▸ **App folder** ▸ name it, e.g. `LedgerOne-Gary` (names must be unique).
 3. On the **Permissions** tab tick `files.metadata.read`, `files.content.read`, `files.content.write` ▸ **Submit**.
 4. On the **Settings** tab copy the **App key** (not the secret — the app doesn't need it).
 
@@ -56,11 +51,11 @@ The app is just the files in this `web` folder (no data in it). Any static HTTPS
 1. Open your app address in **Safari** ▸ Share ▸ **Add to Home Screen**.
 2. Open **LedgerOne from the Home Screen** (connect from there — Home Screen apps have their own storage).
 3. *Settings* ▸ paste the App key ▸ **Open Dropbox** ▸ **Allow** ▸ copy the code ▸ back in LedgerOne paste it ▸ **Connect**.
-   This creates the folder `Dropbox\Apps\LedgerOne-YourName` (it shows "No ledger.json in Dropbox yet" until step 4).
+   This creates the folder `Dropbox\Apps\LedgerOne-Gary` (it shows "No ledger.json in Dropbox yet" until step 4).
 
 ### 4. Point LedgerOne on Windows at that folder
 
-1. Wait for `%USERPROFILE%\Dropbox\Apps\LedgerOne-YourName` to appear on the PC.
+1. Wait for `C:\Users\Gary Aitcheson\Dropbox\Apps\LedgerOne-Gary` to appear on the PC.
 2. LedgerOne ▸ **Settings ▸ Sync with iPad ▸ Move data to a folder…** ▸ choose that folder.
 3. On the iPad tap the sync status (top bar) — your book downloads and you're done.
 
