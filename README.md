@@ -21,7 +21,10 @@ LedgerOne (Windows) ──▶ Dropbox\Apps\<your app>\ledger.json ◀── Ledg
   reminders, budget lines), so edits made on both devices are kept. If the same transaction was edited on
   both before syncing, the device doing the sync keeps its own version and says so.
 * Your data goes only to your own Dropbox. The app's access is limited to its own app folder.
-* Each sync transfers the whole book (about 12–17 MB), so the first sync on mobile data takes a moment.
+* Each sync transfers the whole book (about 12–17 MB, or about 4 MB when encrypted, as it's compressed first).
+* **Optional encryption:** LedgerOne for Windows ▸ Settings ▸ Book encryption ▸ *Turn on…* encrypts the book
+  with your passphrase (AES-256-GCM, key from PBKDF2-SHA256) before it's saved, so Dropbox only holds
+  scrambled data. The iPad asks for the passphrase once and keeps only the derived, non-exportable key.
 
 ## One-time setup (about 10 minutes)
 

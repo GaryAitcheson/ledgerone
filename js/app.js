@@ -1,6 +1,7 @@
 // LedgerOne for iPad — screens and interaction.
 import * as Store from './store.js';
 import * as Sync from './sync.js';
+import * as Crypto from './crypto.js';
 import {
   Ledger, p, pounds, num, isCategory, isLiability, RealTypes, TypeLabel, TypeGroupLabel, Frequencies,
   today, dOf, toDocDate, fmtDate, addMonths, addDays, Ranges, PastMonthAndFuture, rangeFor, newId, MAX,
@@ -61,7 +62,7 @@ async function persistNow() {
   clearTimeout(persistTimer);
   if (!state.doc) return;
   await Store.set('doc', JSON.stringify(state.doc));
-  await Store.set('meta', { rev: state.rev, dirty: state.dirty, lastSync });
+  await Store.set('meta', { rev: state.rev, dirty: state.dirty, lastSync, enc: state.enc || null });
 }
 
 /** Call after any local edit. */
@@ -102,11 +103,50 @@ function syncNow(opts = {}) {
       return res;
     } catch (e) {
       console.error(e);
-      setStatus('err', 'Sync failed');
-      toast(e.message || String(e));
+      if (e instanceof Crypto.NeedPassphrase) {
+        setStatus('err', 'Locked · tap to unlock');
+        locked = e;
+        setTimeout(() => promptUnlock(e, () => syncNow(opts)), 0);
+      } else {
+        setStatus('err', 'Sync failed');
+        toast(e.message || String(e));
+      }
     } finally { syncing = null; }
   })();
   return syncing;
+}
+
+// ---------- encrypted books ----------
+let locked = null;     // the NeedPassphrase error while the book in Dropbox can't be opened here
+
+function promptUnlock(err, retry) {
+  const dlg = $('#dlg');
+  dlg.innerHTML = `<form method="dialog">
+    <div class="dlg-head"><h2>Unlock your book</h2></div>
+    <div class="dlg-body">
+      <p>Your LedgerOne book is encrypted. Enter its passphrase to open it on this iPad. LedgerOne remembers it here, so you only need to do this once.</p>
+      <div class="form"><label class="w4">Passphrase<input type="password" name="pass" autocomplete="current-password" autocapitalize="off" spellcheck="false"></label></div>
+      <div class="err">${err.wrong ? 'The saved passphrase no longer opens the book. It may have been changed on your PC.' : ''}</div>
+    </div>
+    <div class="dlg-foot"><span class="spacer"></span><button class="btn" value="cancel">Not now</button><button type="button" class="btn primary" data-unlock>Unlock</button></div>
+  </form>`;
+  const f = dlg.querySelector('form'), msg = dlg.querySelector('.err'), btn = dlg.querySelector('[data-unlock]');
+  btn.addEventListener('click', async () => {
+    msg.textContent = 'Checking…';
+    btn.disabled = true;
+    try {
+      await Crypto.unlock(f.pass.value, err.fileText);
+      locked = null;
+      dlg.close();
+      toast('Unlocked');
+      retry();
+    } catch {
+      msg.textContent = "That passphrase didn't open the book. Try again.";
+    } finally { btn.disabled = false; }
+  });
+  f.pass.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); btn.click(); } });
+  dlg.showModal();
+  setTimeout(() => f.pass.focus(), 50);
 }
 
 // ---------- theme ----------
@@ -663,6 +703,11 @@ function pageSettings(main) {
     <h3>Files (manual sync, e.g. through iCloud Drive)</h3>
     <div class="card"><p class="muted">Open a <code>ledger.json</code> saved by LedgerOne on Windows; changes are merged with this iPad's. Save a copy to send your changes back.</p>
       <div class="row-gap"><button class="btn" data-act="open">Open a file…</button><button class="btn" data-act="save"${L ? '' : ' disabled'}>Save a copy…</button></div></div>
+    <h3>Book encryption</h3>
+    <div class="card">${state.enc
+      ? `<p><b>On.</b> The book is encrypted in Dropbox, and this iPad has its passphrase.</p>
+         <button class="btn" data-act="forgetkey">Forget the passphrase on this iPad</button>`
+      : `<p><b>Off.</b> Turn it on in LedgerOne on your PC (Settings ▸ Book encryption); this iPad then asks for the passphrase once.</p>`}</div>
     <h3>Appearance</h3>
     <div class="card"><div class="row-gap">Theme <span class="seg" data-act="theme">${[['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([v, l]) => `<button data-v="${v}" class="${theme === v ? 'on' : ''}">${l}</button>`).join('')}</span></div>
       <p><label><input type="checkbox" data-act="future"${pref('showFuture', true) ? ' checked' : ''}> Show future-dated transactions in registers</label></p>
@@ -718,6 +763,10 @@ function pageSettings(main) {
     state.dirty = true; await syncNow({ uploadIfMissing: true });
   });
   on('disconnect', () => { if (confirm('Disconnect Dropbox? Your data stays on this iPad.')) { Sync.disconnect(); setStatus('off', 'Sync not set up'); render(); } });
+  on('forgetkey', async () => {
+    if (!confirm('Forget the passphrase on this iPad? You will need to enter it again to sync.')) return;
+    await Crypto.forgetKey(); toast('Passphrase forgotten on this iPad');
+  });
   on('open', openFile);
   on('save', saveCopy);
   main.querySelector('[data-act="theme"]').addEventListener('click', (e) => { const b = e.target.closest('[data-v]'); if (!b) return; setPref('theme', b.dataset.v); applyTheme(); render(); });
@@ -725,8 +774,8 @@ function pageSettings(main) {
   main.querySelector('[data-act="closed"]').addEventListener('change', (e) => { setPref('showClosed', e.target.checked); renderSidebar(parseRoute()); });
   on('erase', async () => {
     if (!confirm('Erase the book stored on this iPad? Your Dropbox copy and your PC are not touched.')) return;
-    await Store.del('doc'); await Store.del('base'); await Store.del('meta');
-    state = { doc: null, baseText: null, rev: null, dirty: false }; L = null; render();
+    await Store.del('doc'); await Store.del('base'); await Store.del('meta'); await Crypto.forgetKey();
+    state = { doc: null, baseText: null, rev: null, dirty: false, enc: null }; L = null; render();
   });
 }
 
@@ -736,27 +785,35 @@ function openFile() {
   inp.type = 'file'; inp.accept = '.json,application/json';
   inp.onchange = async () => {
     const file = inp.files[0]; if (!file) return;
-    try {
-      const text = await file.text();
-      if (syncing) await syncing;
-      const res = Sync.mergeOpenedFile(state, text);
-      const hadData = !!state.doc;
-      state.doc = res.doc;
-      if (!hadData || !Sync.connected()) state.baseText = text;
-      state.dirty = hadData ? true : Sync.connected();
-      L = new Ledger(state.doc);
-      if (state.baseText === text) await Store.set('base', text);
-      await persistNow();
-      toast(hadData ? `Merged ${file.name}${res.conflicts ? ` (${res.conflicts} edited in both — kept this iPad's)` : ''}` : `Opened ${file.name}`);
-      go('#/home');
-      scheduleSync(500);
-    } catch (e) { toast('Couldn\'t open that file: ' + e.message); }
+    openText(await file.text(), file.name);
   };
   inp.click();
 }
 
+async function openText(text, name) {
+  try {
+    if (syncing) await syncing;
+    const res = await Sync.mergeOpenedFile(state, text);
+    const hadData = !!state.doc;
+    state.doc = res.doc;
+    if (!Sync.connected()) state.enc = res.enc;
+    if (!hadData || !Sync.connected()) { state.baseText = res.json; await Store.set('base', res.json); }
+    state.dirty = hadData ? true : Sync.connected();
+    L = new Ledger(state.doc);
+    await persistNow();
+    toast(hadData ? `Merged ${name}${res.conflicts ? ` (${res.conflicts} edited in both — kept this iPad's)` : ''}` : `Opened ${name}`);
+    go('#/home');
+    scheduleSync(500);
+  } catch (e) {
+    if (e instanceof Crypto.NeedPassphrase) promptUnlock(e, () => openText(text, name));
+    else toast("Couldn't open that file: " + e.message);
+  }
+}
+
 async function saveCopy() {
-  const text = JSON.stringify(state.doc, null, 2);
+  let text;
+  try { text = await Crypto.seal(JSON.stringify(state.doc, null, 2), state.enc); }      // stays encrypted if the book is
+  catch { toast('Unlock the book first'); return; }
   const file = new File([text], 'ledger.json', { type: 'application/json' });
   if (navigator.canShare?.({ files: [file] })) {
     try { await navigator.share({ files: [file], title: 'ledger.json' }); } catch { /* cancelled */ }
@@ -779,7 +836,7 @@ function wire() {
     setPref('collapsed', [...ui.collapsed]); renderSidebar(parseRoute());
   });
   $('#themeBtn').addEventListener('click', () => { setPref('theme', effectiveDark() ? 'light' : 'dark'); applyTheme(); render(); });
-  $('#syncBtn').addEventListener('click', () => (Sync.connected() ? syncNow() : go('#/settings')));
+  $('#syncBtn').addEventListener('click', () => (locked ? promptUnlock(locked, () => syncNow()) : Sync.connected() ? syncNow() : go('#/settings')));
   $('#search').addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' || !L) return;
     ui.query = e.target.value.trim(); ui.range = 0; searching = true; e.target.blur();
@@ -799,7 +856,7 @@ async function boot() {
     const text = await Store.get('doc');
     const meta = (await Store.get('meta')) || {};
     if (text) {
-      state = { doc: JSON.parse(text), baseText: (await Store.get('base')) ?? null, rev: meta.rev ?? null, dirty: !!meta.dirty };
+      state = { doc: JSON.parse(text), baseText: (await Store.get('base')) ?? null, rev: meta.rev ?? null, dirty: !!meta.dirty, enc: meta.enc || null };
       lastSync = meta.lastSync || 0;
       L = new Ledger(state.doc);
     }

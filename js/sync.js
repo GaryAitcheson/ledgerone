@@ -3,6 +3,7 @@
 // Uses OAuth PKCE with a pasted code (no redirect), which works inside a Home Screen web app.
 import { merge3, canon } from './merge.js';
 import { pref, setPref } from './store.js';
+import * as Crypto from './crypto.js';
 
 const API = 'https://api.dropboxapi.com', CONTENT = 'https://content.dropboxapi.com';
 
@@ -93,48 +94,64 @@ const asciiJson = (o) => JSON.stringify(o).replace(/[\u007f-￿]/g, c => '\\u' +
  * Returns { state, changed (doc replaced from remote), message }.
  */
 export async function syncDropbox(state, { uploadIfMissing = false } = {}) {
+  const enc0 = state.enc || null;
   for (let attempt = 0; attempt < 4; attempt++) {
     const meta = await metadata();
     if (!meta) {
       if (!uploadIfMissing) return { state, changed: false, message: 'missing' };
-      const rev = await upload(JSON.stringify(state.doc), null);
+      const text = JSON.stringify(state.doc);
+      const rev = await upload(await Crypto.seal(text, state.enc), null);
       if (!rev) continue;
-      return { state: { ...state, baseText: JSON.stringify(state.doc), rev, dirty: false }, changed: false, message: 'Uploaded to Dropbox' };
+      return { state: { ...state, baseText: text, rev, dirty: false }, changed: false, message: 'Uploaded to Dropbox' };
     }
     if (meta.rev === state.rev) {
       if (!state.dirty) return { state, changed: false, message: 'Up to date' };
       const text = JSON.stringify(state.doc);
-      const rev = await upload(text, state.rev);
+      const rev = await upload(await Crypto.seal(text, state.enc), state.rev);
       if (!rev) continue;                                     // changed meanwhile: go round again
       return { state: { ...state, baseText: text, rev, dirty: false }, changed: false, message: 'Changes uploaded' };
     }
     // Dropbox has a newer version
     const remote = await download();
-    const remoteDoc = JSON.parse(remote.text);
+    let opened;
+    try { opened = await Crypto.open(remote.text); }
+    catch (e) { if (e instanceof Crypto.NeedPassphrase) e.fileText = remote.text; throw e; }
+    const remoteDoc = checkBook(JSON.parse(opened.json));
+    const enc = opened.enc;
+    const note = !enc0 && enc ? ' (the book is now encrypted)' : enc0 && !enc ? ' (encryption was turned off)' : '';
     if (!state.dirty || !state.doc) {
-      return { state: { doc: remoteDoc, baseText: remote.text, rev: remote.rev, dirty: false }, changed: true, message: 'Updated from Dropbox' };
+      return { state: { doc: remoteDoc, baseText: opened.json, rev: remote.rev, dirty: false, enc }, changed: true, message: 'Updated from Dropbox' + note };
     }
     const base = state.baseText ? JSON.parse(state.baseText) : {};
     const m = merge3(base, state.doc, remoteDoc);
     if (m.localWins === 0) {
-      return { state: { doc: m.doc, baseText: remote.text, rev: remote.rev, dirty: false }, changed: true, message: 'Updated from Dropbox' };
+      return { state: { doc: m.doc, baseText: opened.json, rev: remote.rev, dirty: false, enc }, changed: true, message: 'Updated from Dropbox' + note };
     }
     const text = JSON.stringify(m.doc);
-    const rev = await upload(text, remote.rev);
-    if (!rev) { state = { doc: m.doc, baseText: remote.text, rev: remote.rev, dirty: true }; continue; }
+    const rev = await upload(await Crypto.seal(text, enc), remote.rev);
+    if (!rev) { state = { doc: m.doc, baseText: opened.json, rev: remote.rev, dirty: true, enc }; continue; }
     return {
-      state: { doc: m.doc, baseText: text, rev, dirty: false }, changed: true,
-      message: m.conflicts ? `Merged (${m.conflicts} edited on both devices — kept this iPad's version)` : 'Merged and uploaded',
+      state: { doc: m.doc, baseText: text, rev, dirty: false, enc }, changed: true,
+      message: (m.conflicts ? `Merged (${m.conflicts} edited on both devices — kept this iPad's version)` : 'Merged and uploaded') + note,
     };
   }
   throw new Error('Dropbox kept changing during sync — try again');
 }
 
+/** Refuse anything that isn't a LedgerOne book, so an odd file can never replace the book. */
+function checkBook(doc) {
+  if (!doc || !Array.isArray(doc.Accounts) || !Array.isArray(doc.Transactions)) throw new Error("The file in Dropbox isn't a LedgerOne book this version understands");
+  return doc;
+}
+
 /** Merge a file the user opened manually (e.g. from iCloud Drive) into the local book. */
-export function mergeOpenedFile(state, text) {
-  const opened = JSON.parse(text);
-  if (!Array.isArray(opened.Accounts) || !Array.isArray(opened.Transactions)) throw new Error('That is not a LedgerOne file');
-  if (!state.doc || !state.baseText) return { doc: opened, conflicts: 0 };
-  const m = merge3(JSON.parse(state.baseText), state.doc, opened);
-  return { doc: m.doc, conflicts: m.conflicts, same: canon(m.doc) === canon(opened) };
+export async function mergeOpenedFile(state, text) {
+  let opened;
+  try { opened = await Crypto.open(text); }
+  catch (e) { if (e instanceof Crypto.NeedPassphrase) e.fileText = text; throw e; }
+  const doc = JSON.parse(opened.json);
+  if (!Array.isArray(doc.Accounts) || !Array.isArray(doc.Transactions)) throw new Error('That is not a LedgerOne file');
+  if (!state.doc || !state.baseText) return { doc, json: opened.json, enc: opened.enc, conflicts: 0 };
+  const m = merge3(JSON.parse(state.baseText), state.doc, doc);
+  return { doc: m.doc, json: opened.json, enc: opened.enc, conflicts: m.conflicts, same: canon(m.doc) === canon(doc) };
 }
