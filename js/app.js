@@ -5,7 +5,7 @@ import * as Crypto from './crypto.js';
 import * as Lock from './lock.js';
 import {
   Ledger, p, pounds, num, isCategory, isLiability, RealTypes, TypeLabel, TypeGroupLabel, Frequencies,
-  today, dOf, toDocDate, fmtDate, addMonths, addDays, Ranges, PastMonthAndFuture, rangeFor, newId, MAX,
+  today, dOf, toDocDate, fmtDate, addMonths, addDays, Ranges, Filters, PastMonthAndFuture, NewOnly, UnclearedOnly, rangeFor, newId, MAX,
 } from './ledger.js';
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -300,6 +300,7 @@ function renderSidebar(r) {
   let h = sbRow('#/home', I.home, tint.home, 'Summary', '', sel('home'))
         + sbRow('#/reminders', I.bell, tint.rem, 'Reminders', due ? `<span class="badge">${due}</span>` : '', sel('reminders'));
   const showClosed = pref('showClosed', false);
+  const withNew = L.accountsWithNew();
   for (const type of RealTypes) {
     const accts = L.realAccounts.filter(a => a.Type === type && a.ShowInSidebar !== false && (showClosed || !a.Closed))
       .sort((a, b) => a.Name.localeCompare(b.Name, undefined, { sensitivity: 'base' }));
@@ -307,7 +308,7 @@ function renderSidebar(r) {
     const c = ui.collapsed.has(type);
     h += sbHead(TypeLabel[type].toUpperCase(), type, c);
     if (!c) for (const a of accts)
-      h += sbRow(`#/acct/${encodeURIComponent(a.Id)}`, iconFor(type), tint.acct, a.Name, esc(L.format(L.sidebarBalance(a), a)), sel('acct', a.Id), a.Closed);
+      h += sbRow(`#/acct/${encodeURIComponent(a.Id)}`, iconFor(type), tint.acct, a.Name, esc(L.format(L.sidebarBalance(a), a)) + (withNew.has(a.Id) ? ' <i class="newdot" title="New downloads to confirm"></i>' : ''), sel('acct', a.Id), a.Closed);
   }
   for (const [type, label] of [['Expense', 'EXPENSE'], ['Income', 'INCOME']]) {
     const cats = L.categories.filter(c => c.Type === type && c.ShowInSidebar && !c.Closed)
@@ -472,7 +473,8 @@ function pageRegister(main, acctId) {
       <div class="sub" style="flex-basis:100%;margin-top:-10px">${esc(sub)}</div></div>
     <div class="filterbar">
       <button class="btn" data-act="new">${I.plus}New</button>
-      <select data-act="range" aria-label="Date filter">${Ranges.map((r, i) => `<option value="${i}"${i === ui.range ? ' selected' : ''}>${r}</option>`).join('')}</select>
+      <select data-act="range" aria-label="Filter">${Filters.map(([label, code]) => `<option value="${code}"${code === ui.range ? ' selected' : ''}>${label}</option>`).join('')}</select>
+      <button class="btn hidden" data-act="confirmall" title="Confirm every new (downloaded) transaction shown">Confirm all</button>
       <input type="search" data-act="filter" placeholder="Filter payee, memo, category, amount" value="${esc(ui.query)}" enterkeyhint="search">
     </div>
     <div class="reg${all ? ' all' : ''}"><div class="reg-head">${head}</div><div class="reg-body"></div></div>
@@ -481,6 +483,10 @@ function pageRegister(main, acctId) {
   reg = { key: acctId || '*', acct, all, rows: [], body: main.querySelector('.reg-body'), sel: null };
   main.querySelector('[data-act="new"]').addEventListener('click', () => openTxn(null));
   main.querySelector('[data-act="range"]').addEventListener('change', (e) => { ui.range = Number(e.target.value); loadRows(true); });
+  main.querySelector('[data-act="confirmall"]').addEventListener('click', async () => {
+    if (syncing) await syncing;
+    if (L.confirm(reg.rows.map(r => r.t))) { toast('Confirmed'); changed(); }
+  });
   let ft;
   main.querySelector('[data-act="filter"]').addEventListener('input', (e) => { clearTimeout(ft); ft = setTimeout(() => { ui.query = e.target.value; loadRows(true); }, 200); });
   reg.body.addEventListener('scroll', () => requestAnimationFrame(drawRows), { passive: true });
@@ -495,20 +501,24 @@ function pageRegister(main, acctId) {
 function loadRows(scroll) {
   const { acct, all } = reg;
   const entries = all ? L.allRows() : L.register(acct);
-  const [from, to] = rangeFor(ui.range);
-  const t = today(), showFuture = pref('showFuture', true) || ui.range === PastMonthAndFuture;
+  const code = ui.range;
+  const [from, to] = code === NewOnly || code === UnclearedOnly ? ['0001-01-01', MAX] : rangeFor(code);
+  const t = today(), showFuture = pref('showFuture', true) || code === PastMonthAndFuture || code === NewOnly || code === UnclearedOnly;
   const q = ui.query.trim().toLowerCase();
   const qAmt = q && /^[£$€]?-?[\d,]*\.?\d+$/.test(q) ? Math.abs(p(Number(q.replace(/[£$€,]/g, '')))) : 0;
   reg.rows = entries.filter(e => {
     const d = dOf(e.t.Date);
     if (d < from || d > to || (!showFuture && d > t)) return false;
+    if (code === NewOnly && !e.t.Unconfirmed) return false;
+    if (code === UnclearedOnly && (e.t.Status || 'Uncleared') !== 'Uncleared') return false;
     if (!q) return true;
     return (e.t.Payee || '').toLowerCase().includes(q) || (e.memo || '').toLowerCase().includes(q) || e.category.toLowerCase().includes(q)
       || (e.t.Number || '').toLowerCase().includes(q) || (qAmt && Math.abs(e.amount) === qAmt)
       || (e.t.Splits || []).some(s => L.fullName(s.TargetId).toLowerCase().includes(q));
   });
   const n = reg.rows.length;
-  reg.body.innerHTML = `<div class="spacer" style="position:relative;height:${n * ROW}px"></div>` + (n ? '' : `<div class="empty" style="position:absolute;inset:0">${entries.length ? 'No transactions match the filter' : 'No transactions yet — tap New'}</div>`);
+  reg.body.innerHTML = `<div class="spacer" style="position:relative;height:${n * ROW}px"></div>` + (n ? '' : `<div class="empty" style="position:absolute;inset:0">${!entries.length ? 'No transactions yet — tap New' : code === NewOnly ? 'No new transactions: everything downloaded has been confirmed' : 'No transactions match the filter'}</div>`);
+  document.querySelector('[data-act="confirmall"]')?.classList.toggle('hidden', !reg.rows.some(r => r.t.Unconfirmed));
   reg.spacer = reg.body.firstChild;
   reg.drawn = '';
   const inSum = reg.rows.reduce((s, r) => s + (r.amount > 0 ? r.amount : 0), 0), outSum = reg.rows.reduce((s, r) => s + (r.amount < 0 ? -r.amount : 0), 0);
@@ -541,7 +551,7 @@ function drawRows() {
     html += `<div class="${cls}" style="top:${i * ROW}px" data-i="${i}">`
       + `<div class="l1 c-date">${fmtDate(d)}</div>`
       + (reg.all ? `<div class="l1 c-acct">${esc(r.account)}</div>` : `<div class="l1 c-num">${esc(r.t.Number || '')}</div>`)
-      + `<div class="l1 c-desc">${esc(r.t.Payee)}</div><div class="l1 c-cat">${esc(r.category.replace(/^\[(.*)\]$/, '$1'))}</div>`
+      + `<div class="l1 c-desc">${r.t.Unconfirmed ? `<span class="nd on" data-confirm="${i}" title="New from the bank: tap to confirm"></span>` : r.t.ImportId ? '<span class="nd" title="Downloaded from the bank"></span>' : ''}${esc(r.t.Payee)}</div><div class="l1 c-cat">${esc(r.category.replace(/^\[(.*)\]$/, '$1'))}</div>`
       + `<div class="c-st" data-st="${i}"><i class="${st}"></i></div>`
       + `<div class="l1 c-pay num">${pay}</div><div class="l1 c-dep num">${dep}</div>`
       + (reg.all ? '' : `<div class="l1 c-bal num bal ${r.balance < 0 ? 'neg' : 'pos'}">${num(r.balance)}</div>`)
@@ -554,6 +564,13 @@ function drawRows() {
 }
 
 function onRegClick(e) {
+  const nd = e.target.closest('[data-confirm]');
+  if (nd) {
+    // tap the cyan dot to confirm a downloaded transaction, like Moneydance
+    const r = reg.rows[Number(nd.dataset.confirm)];
+    if (L.confirm([r.t])) { reg.drawn = ''; changed(); }
+    return;
+  }
   const stEl = e.target.closest('[data-st]');
   if (stEl) {
     // tap the status mark to cycle uncleared → cleared → reconciled
@@ -661,6 +678,7 @@ function openTxn(t) {
     let target = isNew ? null : L.doc.Transactions.find(x => x.Id === t.Id);
     if (!target) { target = { Id: draft.Id, Entered: draft.Entered, Tags: [] }; }
     Object.assign(target, {
+      Unconfirmed: false,          // editing a downloaded transaction confirms it, as in Moneydance
       Date: toDocDate(f.date.value), AccountId: f.acct.value, Payee: f.payee.value.trim(), Status: status, Splits: splits,
       Tags: f.tags.value.split(',').map(x => x.trim()).filter(Boolean),
     });

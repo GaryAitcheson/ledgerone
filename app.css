@@ -161,6 +161,11 @@ button { cursor: pointer; }
 .reg-row.future::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--future); }
 .reg-row.sel > div, .reg-row.sel > .l2 { background: var(--sel) !important; color: #fff !important; }
 .reg-row .bal { font-weight: 500; }
+/* Moneydance's cyan dot: filled = new download to confirm (tap it), hollow = downloaded and confirmed */
+.nd { display: inline-block; width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid #3ec8e4; margin-right: 7px; vertical-align: -1px; }
+.nd.on { background: #3ec8e4; cursor: pointer; box-shadow: 0 0 0 7px transparent; }
+.reg-row.sel .nd { border-color: #fff; } .reg-row.sel .nd.on { background: #fff; }
+.newdot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #3ec8e4; margin-left: 5px; vertical-align: 1px; }
 .reg-foot {
   display: flex; gap: 18px; flex-wrap: wrap; justify-content: space-between; padding: 8px 4px calc(10px + env(safe-area-inset-bottom));
   font-size: 13px; color: var(--fg2);

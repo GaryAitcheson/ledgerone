@@ -232,6 +232,14 @@ export class Ledger {
   }
 
   // ---------- mutations ----------
+  /** Mark downloaded transactions as reviewed (Moneydance's "confirm"). Returns how many changed. */
+  confirm(txns) {
+    let n = 0;
+    for (const t of txns) if (t.Unconfirmed) { t.Unconfirmed = false; n++; }
+    return n;
+  }
+  accountsWithNew() { return new Set(this.doc.Transactions.filter(t => t.Unconfirmed).map(t => t.AccountId)); }
+
   saveTxn(t) {
     if (!this.doc.Transactions.includes(t)) this.doc.Transactions.push(t);
     if (t.Payee && !this.doc.MemorizedPayees.some(x => x.toLowerCase() === t.Payee.toLowerCase())) this.doc.MemorizedPayees.push(t.Payee);
@@ -310,9 +318,15 @@ function sortRows(rows) {
   });
 }
 
-/** Register date filters — same choices and meaning as LedgerOne for Windows. */
+/** Date ranges (by code) for the categories view. */
 export const Ranges = ['All dates', 'This month', 'Last month', 'Last 3 months', 'Last 12 months', 'This year', 'Last year', 'Past 30 days + future'];
-export const PastMonthAndFuture = 7;
+export const PastMonthAndFuture = 7, NewOnly = 100, UnclearedOnly = 101;
+/** Register filters, in the same order and with the same meaning as LedgerOne for Windows (and Moneydance's views). */
+export const Filters = [
+  ['All dates', 0], ['New (unconfirmed)', NewOnly], ['Uncleared', UnclearedOnly],
+  ['This month', 1], ['Last month', 2], ['30 days', 8], ['Past 30 days + future', PastMonthAndFuture],
+  ['Last 3 months', 3], ['Last 12 months', 4], ['This year', 5], ['Tax year (since 6 April)', 9], ['Last year', 6],
+];
 export function rangeFor(idx) {
   const t = today(), [y, m] = parts(t), first = `${y}-${pad(m)}-01`;
   switch (idx) {
@@ -323,6 +337,8 @@ export function rangeFor(idx) {
     case 5: return [`${y}-01-01`, `${y}-12-31`];
     case 6: return [`${y - 1}-01-01`, `${y - 1}-12-31`];
     case 7: return [addDays(t, -30), MAX];
+    case 8: return [addDays(t, -30), t];
+    case 9: { const sy = (m > 4 || (m === 4 && Number(t.slice(8)) >= 6)) ? y : y - 1; return [`${sy}-04-06`, `${sy + 1}-04-05`]; }
     default: return [MIN, MAX];
   }
 }
