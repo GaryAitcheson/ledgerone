@@ -1,5 +1,5 @@
 // Offline support: the app shell is cached; Dropbox requests always go to the network.
-const VERSION = 'ledgerone-v6';
+const VERSION = 'ledgerone-v7';
 const SHELL = ['./', 'index.html', 'app.css', 'manifest.webmanifest', 'js/app.js', 'js/ledger.js', 'js/merge.js', 'js/store.js', 'js/sync.js', 'js/crypto.js', 'js/lock.js',
   'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png'];
 

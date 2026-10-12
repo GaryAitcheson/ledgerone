@@ -11,6 +11,8 @@ import {
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const { pref, setPref } = Store;
+/** Stored status names are kept for compatibility; show Moneydance's words (its green "Cleared" is stored as Reconciled). */
+const StatusLabel = { Uncleared: 'Uncleared', Cleared: 'Reconciling', Reconciled: 'Cleared' };
 
 // ---------- icons (inline SVG, currentColor) ----------
 const svg = (d, extra = '') => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" ${extra}>${d}</svg>`;
@@ -552,7 +554,7 @@ function drawRows() {
       + `<div class="l1 c-date">${fmtDate(d)}</div>`
       + (reg.all ? `<div class="l1 c-acct">${esc(r.account)}</div>` : `<div class="l1 c-num">${esc(r.t.Number || '')}</div>`)
       + `<div class="l1 c-desc">${r.t.Unconfirmed ? `<span class="nd on" data-confirm="${i}" title="New from the bank: tap to confirm"></span>` : r.t.ImportId ? '<span class="nd" title="Downloaded from the bank"></span>' : ''}${esc(r.t.Payee)}</div><div class="l1 c-cat">${esc(r.category.replace(/^\[(.*)\]$/, '$1'))}</div>`
-      + `<div class="c-st" data-st="${i}"><i class="${st}"></i></div>`
+      + `<div class="c-st" data-st="${i}" title="${StatusLabel[st]}"><i class="${st}"></i></div>`
       + `<div class="l1 c-pay num">${pay}</div><div class="l1 c-dep num">${dep}</div>`
       + (reg.all ? '' : `<div class="l1 c-bal num bal ${r.balance < 0 ? 'neg' : 'pos'}">${num(r.balance)}</div>`)
       + `<div class="l2 c-date"></div>` + (reg.all ? `<div class="l2 c-acct"></div>` : `<div class="l2 c-num"></div>`)
@@ -573,9 +575,9 @@ function onRegClick(e) {
   }
   const stEl = e.target.closest('[data-st]');
   if (stEl) {
-    // tap the status mark to cycle uncleared → cleared → reconciled
+    // tap the status mark: uncleared → cleared (green, Moneydance's X) → uncleared; reconciling also goes to cleared
     const r = reg.rows[Number(stEl.dataset.st)];
-    const next = { Uncleared: 'Cleared', Cleared: 'Reconciled', Reconciled: 'Uncleared' }[r.t.Status || 'Uncleared'];
+    const next = (r.t.Status || 'Uncleared') === 'Reconciled' ? 'Uncleared' : 'Reconciled';
     r.t.Status = next; reg.drawn = ''; changed(); return;
   }
   const row = e.target.closest('.reg-row');
@@ -629,7 +631,7 @@ function openTxn(t) {
       <div class="form" style="margin-top:14px">
         <label class="w2">Memo<input name="memo" value="${esc(draft.Memo || '')}"></label>
         <label class="w2">Tags<input name="tags" value="${esc((draft.Tags || []).join(', '))}" placeholder="comma separated"></label>
-        <label class="w4">Status<span class="seg" data-status>${['Uncleared', 'Cleared', 'Reconciled'].map(s => `<button type="button" data-s="${s}" class="${(draft.Status || 'Uncleared') === s ? 'on' : ''}">${s}</button>`).join('')}</span></label>
+        <label class="w4">Status<span class="seg" data-status>${['Uncleared', 'Cleared', 'Reconciled'].map(s => `<button type="button" data-s="${s}" class="${(draft.Status || 'Uncleared') === s ? 'on' : ''}">${StatusLabel[s]}</button>`).join('')}</span></label>
       </div>
       <div class="err"></div>
     </div>
