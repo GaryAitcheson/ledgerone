@@ -143,7 +143,9 @@ button { cursor: pointer; }
   display: grid; grid-template-columns: var(--cols); background: linear-gradient(var(--hdr1), var(--hdr2));
   border-bottom: 1px solid var(--line); color: var(--hdrfg); font-size: 12.5px; line-height: 1.25; padding: 5px 0;
 }
-.reg-head > div { padding: 0 8px; text-align: center; }
+.reg-head > div { padding: 0 8px; text-align: center; cursor: pointer; -webkit-user-select: none; user-select: none; }
+.reg-head > div.sorted::after { content: ' \25B2'; font-size: 9px; }
+.reg-head.desc > div.sorted::after { content: ' \25BC'; }
 .reg-body { flex: 1; overflow-y: auto; position: relative; -webkit-overflow-scrolling: touch; background: var(--reg1); }
 .reg-row {
   position: absolute; left: 0; right: 0; height: 52px; display: grid; grid-template-columns: var(--cols);

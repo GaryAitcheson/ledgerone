@@ -115,13 +115,17 @@ export class Ledger {
     return (this._series = res);
   }
 
-  /** Balance in pennies as of a date (default today, like Moneydance's current balance). */
+  /**
+   * Balance in pennies as of a date (default today, like Moneydance's current balance).
+   * clearedOnly counts only cleared (green, Moneydance "X") transactions; pass asOf = null for Moneydance's
+   * cleared balance, whatever the dates.
+   */
   balance(a, asOf = today(), clearedOnly = false) {
     const open = isCategory(a) ? 0 : p(a.OpeningBalance);
     if (clearedOnly) {
       let bal = open;
       for (const t of this.doc.Transactions) {
-        if (dOf(t.Date) > asOf || (t.Status || 'Uncleared') === 'Uncleared') continue;
+        if ((asOf && dOf(t.Date) > asOf) || t.Status !== 'Reconciled') continue;
         for (const s of t.Splits || []) { if (t.AccountId === a.Id) bal += p(s.Amount); if (s.TargetId === a.Id) bal -= p(s.Amount); }
       }
       return bal;
@@ -133,10 +137,21 @@ export class Ledger {
     return open + (idx >= 0 ? sr.cum[idx] : 0);
   }
 
-  /** Sidebar balance: the account plus real sub-accounts (investment holdings). */
-  sidebarBalance(a) {
-    let v = this.balance(a);
-    for (const c of this.childrenMap().get(a.Id) || []) if (!isCategory(c)) v += this.balance(c);
+  /** Cleared balance change per account id, in one pass (for the sidebar). */
+  clearedTotals() {
+    const m = new Map(), add = (id, v) => m.set(id, (m.get(id) || 0) + v);
+    for (const t of this.doc.Transactions) {
+      if (t.Status !== 'Reconciled') continue;
+      for (const s of t.Splits || []) { add(t.AccountId, p(s.Amount)); add(s.TargetId, -p(s.Amount)); }
+    }
+    return m;
+  }
+
+  /** Sidebar balance: the account plus real sub-accounts (investment holdings). With `cleared` (from clearedTotals), the cleared balance. */
+  sidebarBalance(a, cleared = null) {
+    const one = (x) => cleared ? (isCategory(x) ? 0 : p(x.OpeningBalance)) + (cleared.get(x.Id) || 0) : this.balance(x);
+    let v = one(a);
+    for (const c of this.childrenMap().get(a.Id) || []) if (!isCategory(c)) v += one(c);
     return v;
   }
 

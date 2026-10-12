@@ -51,6 +51,7 @@ let lastSync = 0;
 let syncing = null;
 const ui = {
   range: 1,                                   // register filter: "This month"
+  sort: { col: 'date', desc: false },         // register column sort; date = normal register order
   query: '',
   collapsed: new Set(pref('collapsed', ['Asset', 'Income'])),
   homeCollapsed: new Set(pref('homeCollapsed', [])),
@@ -303,6 +304,7 @@ function renderSidebar(r) {
         + sbRow('#/reminders', I.bell, tint.rem, 'Reminders', due ? `<span class="badge">${due}</span>` : '', sel('reminders'));
   const showClosed = pref('showClosed', false);
   const withNew = L.accountsWithNew();
+  const cleared = pref('sbCleared', true) ? L.clearedTotals() : null;
   for (const type of RealTypes) {
     const accts = L.realAccounts.filter(a => a.Type === type && a.ShowInSidebar !== false && (showClosed || !a.Closed))
       .sort((a, b) => a.Name.localeCompare(b.Name, undefined, { sensitivity: 'base' }));
@@ -310,7 +312,7 @@ function renderSidebar(r) {
     const c = ui.collapsed.has(type);
     h += sbHead(TypeLabel[type].toUpperCase(), type, c);
     if (!c) for (const a of accts)
-      h += sbRow(`#/acct/${encodeURIComponent(a.Id)}`, iconFor(type), tint.acct, a.Name, esc(L.format(L.sidebarBalance(a), a)) + (withNew.has(a.Id) ? ' <i class="newdot" title="New downloads to confirm"></i>' : ''), sel('acct', a.Id), a.Closed);
+      h += sbRow(`#/acct/${encodeURIComponent(a.Id)}`, iconFor(type), tint.acct, a.Name, esc(L.format(L.sidebarBalance(a, cleared), a)) + (withNew.has(a.Id) ? ' <i class="newdot" title="New downloads to confirm"></i>' : ''), sel('acct', a.Id), a.Closed);
   }
   for (const [type, label] of [['Expense', 'EXPENSE'], ['Income', 'INCOME']]) {
     const cats = L.categories.filter(c => c.Type === type && c.ShowInSidebar && !c.Closed)
@@ -467,8 +469,8 @@ function pageRegister(main, acctId) {
   }
   const [payH, depH] = all ? ['Payment', 'Deposit'] : ({ CreditCard: ['Charge', 'Payment'], Loan: ['Increase', 'Decrease'], Liability: ['Increase', 'Decrease'], Expense: ['Refund', 'Spent'], Income: ['Reversal', 'Received'] }[acct.Type] || ['Payment', 'Deposit']);
   const head = all
-    ? `<div class="c-date">Date</div><div class="c-desc">Description<br>Memo</div><div class="c-acct">Account</div><div class="c-cat">Category<br>Tags</div><div class="c-st">✓</div><div class="c-pay">${payH}</div><div class="c-dep">${depH}</div>`
-    : `<div class="c-date">Date</div><div class="c-num">Chq#</div><div class="c-desc">Description<br>Memo</div><div class="c-cat">Category<br>Tags</div><div class="c-st">✓</div><div class="c-pay">${payH}</div><div class="c-dep">${depH}</div><div class="c-bal">Balance</div>`;
+    ? `<div class="c-date" data-sort="date">Date</div><div class="c-desc" data-sort="desc">Description<br>Memo</div><div class="c-acct" data-sort="acct">Account</div><div class="c-cat" data-sort="cat">Category<br>Tags</div><div class="c-st" data-sort="st">✓</div><div class="c-pay" data-sort="pay">${payH}</div><div class="c-dep" data-sort="dep">${depH}</div>`
+    : `<div class="c-date" data-sort="date">Date</div><div class="c-num" data-sort="num">Chq#</div><div class="c-desc" data-sort="desc">Description<br>Memo</div><div class="c-cat" data-sort="cat">Category<br>Tags</div><div class="c-st" data-sort="st">✓</div><div class="c-pay" data-sort="pay">${payH}</div><div class="c-dep" data-sort="dep">${depH}</div><div class="c-bal" data-sort="date">Balance</div>`;
   main.innerHTML = `<div class="register">
     <div class="pg-title"><h1><span style="color:var(--acct);width:28px;display:inline-flex">${all ? I.list : iconFor(acct.Type)}</span>${esc(title)}</h1>
       <div class="bigbal"><div class="lbl">${balLabel}</div><div class="amt">${esc(bal)}</div></div>
@@ -493,6 +495,13 @@ function pageRegister(main, acctId) {
   main.querySelector('[data-act="filter"]').addEventListener('input', (e) => { clearTimeout(ft); ft = setTimeout(() => { ui.query = e.target.value; loadRows(true); }, 200); });
   reg.body.addEventListener('scroll', () => requestAnimationFrame(drawRows), { passive: true });
   reg.body.addEventListener('click', onRegClick);
+  main.querySelector('.reg-head').addEventListener('click', (e) => {
+    // tap a heading to sort by it, again to reverse (Balance sorts by date, like the normal order)
+    const h = e.target.closest('[data-sort]'); if (!h) return;
+    const col = h.dataset.sort;
+    ui.sort = ui.sort.col === col ? { col, desc: !ui.sort.desc } : { col, desc: false };
+    loadRows(true);
+  });
   loadRows(keepTop == null);
   if (keepTop != null) {
     reg.sel = reg.rows.find(r => r.t.Id === keepSel) || null;
@@ -518,6 +527,10 @@ function loadRows(scroll) {
       || (e.t.Number || '').toLowerCase().includes(q) || (qAmt && Math.abs(e.amount) === qAmt)
       || (e.t.Splits || []).some(s => L.fullName(s.TargetId).toLowerCase().includes(q));
   });
+  sortRows(reg.rows);
+  document.querySelectorAll('.reg-head [data-sort]').forEach(h =>
+    h.classList.toggle('sorted', ui.sort.col === h.dataset.sort && (h.dataset.sort !== 'date' || h.classList.contains('c-date'))));
+  document.querySelector('.reg-head')?.classList.toggle('desc', ui.sort.desc);
   const n = reg.rows.length;
   reg.body.innerHTML = `<div class="spacer" style="position:relative;height:${n * ROW}px"></div>` + (n ? '' : `<div class="empty" style="position:absolute;inset:0">${!entries.length ? 'No transactions yet — tap New' : code === NewOnly ? 'No new transactions: everything downloaded has been confirmed' : 'No transactions match the filter'}</div>`);
   document.querySelector('[data-act="confirmall"]')?.classList.toggle('hidden', !reg.rows.some(r => r.t.Unconfirmed));
@@ -527,14 +540,36 @@ function loadRows(scroll) {
   const foot = document.querySelector('.reg-foot');
   foot.querySelector('[data-k="count"]').textContent = `${n.toLocaleString('en-GB')} transactions  ·  in ${L.money(inSum)}  ·  out ${L.money(outSum)}`;
   foot.querySelector('[data-k="totals"]').textContent = all ? '' :
-    `Cleared: ${L.money(L.balance(acct, t, true))}   Today: ${L.money(L.balance(acct, t))}   Projected: ${L.money(L.balance(acct, MAX))}`;
-  if (scroll) {
+    `Cleared: ${L.money(L.balance(acct, null, true))}   Today: ${L.money(L.balance(acct, t))}   Projected: ${L.money(L.balance(acct, MAX))}`;
+  if (scroll && (ui.sort.col !== 'date' || ui.sort.desc)) reg.body.scrollTop = 0;
+  else if (scroll) {
     // like Moneydance: show the latest non-future transaction at the bottom
     let idx = n - 1; while (idx > 0 && dOf(reg.rows[idx].t.Date) > t) idx--;
     reg.body.scrollTop = Math.max(0, (idx + 1) * ROW - reg.body.clientHeight + 8);
   }
   drawRows();
 }
+
+/** Re-order register rows for the chosen column. Rows arrive in date order; ties keep it. Empty cells stay at the bottom. */
+function sortRows(rows) {
+  const { col, desc } = ui.sort;
+  if (col === 'date') { if (desc) rows.reverse(); return; }
+  const coll = new Intl.Collator('en-GB', { sensitivity: 'base', numeric: true });
+  const spec = {
+    num: [r => !r.t.Number, (a, b) => coll.compare(a.t.Number, b.t.Number)],
+    desc: [() => false, (a, b) => coll.compare(a.t.Payee || '', b.t.Payee || '')],
+    acct: [() => false, (a, b) => coll.compare(a.account || '', b.account || '')],
+    cat: [() => false, (a, b) => coll.compare(a.category, b.category)],
+    st: [() => false, (a, b) => (StatusRankOf(a) - StatusRankOf(b))],
+    pay: [r => r.amount >= 0, (a, b) => b.amount - a.amount],
+    dep: [r => r.amount <= 0, (a, b) => a.amount - b.amount],
+  }[col];
+  if (!spec) return;
+  const [empty, cmp] = spec;
+  rows.forEach((r, i) => { r._i = i; });
+  rows.sort((a, b) => (empty(a) - empty(b)) || (desc ? -cmp(a, b) : cmp(a, b)) || a._i - b._i);
+}
+const StatusRankOf = (r) => ({ Reconciled: 2, Cleared: 1 })[r.t.Status] || 0;
 
 function drawRows() {
   if (!reg || !reg.spacer?.isConnected) return;
@@ -819,7 +854,8 @@ function pageSettings(main) {
     <h3>Appearance</h3>
     <div class="card"><div class="row-gap">Theme <span class="seg" data-act="theme">${[['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([v, l]) => `<button data-v="${v}" class="${theme === v ? 'on' : ''}">${l}</button>`).join('')}</span></div>
       <p><label><input type="checkbox" data-act="future"${pref('showFuture', true) ? ' checked' : ''}> Show future-dated transactions in registers</label></p>
-      <p><label><input type="checkbox" data-act="closed"${pref('showClosed', false) ? ' checked' : ''}> Show closed accounts in the sidebar</label></p></div>
+      <p><label><input type="checkbox" data-act="closed"${pref('showClosed', false) ? ' checked' : ''}> Show closed accounts in the sidebar</label></p>
+      <p><label><input type="checkbox" data-act="sbcleared"${pref('sbCleared', true) ? ' checked' : ''}> Sidebar shows cleared balances (off: today's balance)</label></p></div>
     <h3>Data on this iPad</h3>
     <div class="card"><p>${esc(stats)}</p><p class="muted">Your book is stored only on this iPad and in your own Dropbox — never on any other server.</p>
       <button class="btn danger" data-act="erase"${L ? '' : ' disabled'}>Erase data on this iPad</button></div>
@@ -881,6 +917,7 @@ function pageSettings(main) {
   main.querySelector('[data-act="theme"]').addEventListener('click', (e) => { const b = e.target.closest('[data-v]'); if (!b) return; setPref('theme', b.dataset.v); applyTheme(); render(); });
   main.querySelector('[data-act="future"]').addEventListener('change', (e) => setPref('showFuture', e.target.checked));
   main.querySelector('[data-act="closed"]').addEventListener('change', (e) => { setPref('showClosed', e.target.checked); renderSidebar(parseRoute()); });
+  main.querySelector('[data-act="sbcleared"]').addEventListener('change', (e) => { setPref('sbCleared', e.target.checked); renderSidebar(parseRoute()); });
   on('erase', async () => {
     if (!confirm('Erase the book stored on this iPad? Your Dropbox copy and your PC are not touched.')) return;
     await Store.del('doc'); await Store.del('base'); await Store.del('meta'); await Crypto.forgetKey(); await Lock.remove();
