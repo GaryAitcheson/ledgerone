@@ -250,7 +250,13 @@ export class Ledger {
   /** Mark downloaded transactions as reviewed (Moneydance's "confirm"). Returns how many changed. */
   confirm(txns) {
     let n = 0;
-    for (const t of txns) if (t.Unconfirmed) { t.Unconfirmed = false; n++; }
+    for (const t of txns) {
+      if (!t.Unconfirmed) continue;
+      t.Unconfirmed = false;
+      // Moneydance ("mark confirmed transactions as cleared"): confirming a download clears it
+      if ((t.Status || 'Uncleared') === 'Uncleared') t.Status = 'Reconciled';
+      n++;
+    }
     return n;
   }
   accountsWithNew() { return new Set(this.doc.Transactions.filter(t => t.Unconfirmed).map(t => t.AccountId)); }
