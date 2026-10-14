@@ -51,7 +51,7 @@ let lastSync = 0;
 let syncing = null;
 const ui = {
   range: 1,                                   // register filter: "This month"
-  sort: { col: 'date', desc: false },         // register column sort; date = normal register order
+  sort: { col: 'st', desc: true },            // register column sort: cleared first, then by date (as the PC app opens)
   query: '',
   collapsed: new Set(pref('collapsed', ['Asset', 'Income'])),
   homeCollapsed: new Set(pref('homeCollapsed', [])),
@@ -546,7 +546,8 @@ function loadRows(scroll) {
   foot.querySelector('[data-k="count"]').textContent = `${n.toLocaleString('en-GB')} transactions  ·  in ${L.money(inSum)}  ·  out ${L.money(outSum)}`;
   foot.querySelector('[data-k="totals"]').textContent = all ? '' :
     `Cleared: ${L.money(L.balance(acct, null, true))}   Today: ${L.money(L.balance(acct, t))}   Projected: ${L.money(L.balance(acct, MAX))}`;
-  if (scroll && (ui.sort.col !== 'date' || ui.sort.desc)) reg.body.scrollTop = 0;
+  const latestFirstView = (ui.sort.col === 'date' && !ui.sort.desc) || (ui.sort.col === 'st' && ui.sort.desc);
+  if (scroll && !latestFirstView) reg.body.scrollTop = 0;
   else if (scroll) {
     // like Moneydance: show the latest non-future transaction at the bottom
     let idx = n - 1; while (idx > 0 && dOf(reg.rows[idx].t.Date) > t) idx--;
