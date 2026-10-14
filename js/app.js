@@ -527,7 +527,12 @@ function loadRows(scroll) {
       || (e.t.Number || '').toLowerCase().includes(q) || (qAmt && Math.abs(e.amount) === qAmt)
       || (e.t.Splits || []).some(s => L.fullName(s.TargetId).toLowerCase().includes(q));
   });
+  // Moneydance keeps the balance running down the list as shown: sorted by another column, it starts from the
+  // balance before the earliest row and adds the rows in the order they appear
+  const before = reg.rows.length ? reg.rows[0].balance - reg.rows[0].amount : 0;
   sortRows(reg.rows);
+  let running = before;
+  for (const r of reg.rows) r.shown = ui.sort.col === 'date' ? r.balance : (running += r.amount);
   document.querySelectorAll('.reg-head [data-sort]').forEach(h =>
     h.classList.toggle('sorted', ui.sort.col === h.dataset.sort && (h.dataset.sort !== 'date' || h.classList.contains('c-date'))));
   document.querySelector('.reg-head')?.classList.toggle('desc', ui.sort.desc);
@@ -591,7 +596,7 @@ function drawRows() {
       + `<div class="l1 c-desc">${r.t.Unconfirmed ? `<span class="nd on" data-confirm="${i}" title="New from the bank: tap to confirm"></span>` : r.t.ImportId ? '<span class="nd" title="Downloaded from the bank"></span>' : ''}${esc(r.t.Payee)}</div><div class="l1 c-cat">${esc(r.category.replace(/^\[(.*)\]$/, '$1'))}</div>`
       + `<div class="c-st" data-st="${i}" title="${StatusLabel[st]}"><i class="${st}"></i></div>`
       + `<div class="l1 c-pay num">${pay}</div><div class="l1 c-dep num">${dep}</div>`
-      + (reg.all ? '' : `<div class="l1 c-bal num bal ${r.balance < 0 ? 'neg' : 'pos'}">${num(r.balance)}</div>`)
+      + (reg.all ? '' : `<div class="l1 c-bal num bal ${r.shown < 0 ? 'neg' : 'pos'}">${num(r.shown)}</div>`)
       + `<div class="l2 c-date"></div>` + (reg.all ? `<div class="l2 c-acct"></div>` : `<div class="l2 c-num"></div>`)
       + `<div class="l2 c-desc">${esc(r.memo)}</div><div class="l2 c-cat">${esc(tags)}</div><div class="l2 c-pay"></div><div class="l2 c-dep"></div>`
       + (reg.all ? '' : `<div class="l2 c-bal"></div>`)
